@@ -85,9 +85,25 @@ DEMO_DOCUMENTS = [
 ]
 
 
-async def build_agents(llm_client: LLMClient, prompt_manager: PromptManager):
+async def build_agents(llm_client: LLMClient, prompt_manager: PromptManager, config: dict):
     """构建所有 Agent 实例"""
-    mysql_repo = MySQLRepository()
+    # 读取 MySQL 配置
+    mysql_cfg = config.get("mysql", {})
+    mysql_password = mysql_cfg.get("password", "")
+    # 去掉 ${} 包装（环境变量语法）
+    if mysql_password.startswith("${") and mysql_password.endswith("}"):
+        env_var = mysql_password[2:-1]
+        import os
+        mysql_password = os.environ.get(env_var, "")
+
+    mysql_repo = MySQLRepository(
+        host=mysql_cfg.get("host", "localhost"),
+        port=mysql_cfg.get("port", 3306),
+        user=mysql_cfg.get("user", "root"),
+        password=mysql_password,
+        database=mysql_cfg.get("database", "media_knowledge_db"),
+        charset=mysql_cfg.get("charset", "utf8mb4"),
+    )
     graph_store = GraphStore()
     cleaner = DataCleaner()
 
@@ -140,7 +156,7 @@ async def main():
     prompt_manager = PromptManager()
 
     # 构建 Agent 集群
-    agents = await build_agents(llm_client, prompt_manager)
+    agents = await build_agents(llm_client, prompt_manager, config)
     logger.info(f"已初始化 {len(agents)} 个 Agent: {list(agents.keys())}")
 
     # 创建编排图
@@ -184,10 +200,10 @@ async def main():
             report_path.write_text(result.report, encoding="utf-8")
             logger.info(f"报告已保存至: {report_path}")
 
-            # 同时打印到控制台
-            print("\n" + "=" * 60)
-            print(result.report)
-            print("=" * 60)
+            # # 同时打印到控制台
+            # print("\n" + "=" * 60)
+            # print(result.report)
+            # print("=" * 60)
 
         logger.info("=" * 60)
     except Exception as e:
