@@ -1,0 +1,121 @@
+# ============================================================
+# 系统全局配置文件
+# ============================================================
+
+# --- 运行模式 ---
+mode: "production"                      # "demo" = 内置数据跑全流程 / "production" = 真实网络采集+数据库
+
+# --- LLM 配置 ---
+llm:
+  provider: "openai"              # anthropic / openai (DeepSeek用openai兼容模式)
+  model: "deepseek-chat"          # 主力模型
+  fallback_model: "deepseek-chat"  # 降级模型
+  api_key: "sk-445542f78a464cf299f500d850ddfa48"
+  base_url: "https://api.deepseek.com/v1"
+  max_tokens: 4096
+  temperature: 0.1               # 抽取类任务低温度
+  request_timeout: 120
+
+# --- 小模型配置 ---
+small_model:
+  ner:
+    engine: "hanlp"              # hanlp / bert / spacy
+    model_path: "./models/ner"
+    use_gpu: false
+  embedding:
+    engine: "sentence-transformers"
+    model: "paraphrase-multilingual-MiniLM-L12-v2"
+    dim: 384
+
+# --- MySQL 配置 ---
+mysql:
+  host: "localhost"
+  port: 3306
+  user: "root"
+  password: "${media123}"     # 直接填密码，或设置环境变量 MYSQL_PASSWORD
+  database: "media_knowledge"
+  charset: "utf8mb4"
+  pool_size: 10
+  pool_recycle: 3600
+
+# --- Neo4j 配置 ---
+neo4j:
+  uri: "bolt://localhost:7687"
+  user: "neo4j"
+  password: "${NEO4J_PASSWORD}"
+  database: "neo4j"
+  max_connection_lifetime: 3600
+  max_connection_pool_size: 20
+
+# --- Agent 配置 ---
+agents:
+  orchestrator:
+    name: "Orchestrator"
+    max_retries: 3
+    timeout: 300
+
+  planner:
+    name: "Planner"
+    max_parallel_tasks: 5
+    decomposition_depth: 3
+
+  collector:
+    name: "Collector"
+    max_concurrent_requests: 10
+    request_delay: 1.0          # 请求间隔(秒)
+    user_agent: "MediaKnowledgeBot/1.0"
+    respect_robots_txt: true
+    sources:
+      rss:
+        - "https://feeds.feedburner.com/TechCrunch"     # TechCrunch 科技新闻
+        - "http://feeds.bbci.co.uk/news/technology/rss.xml"  # BBC 科技板块
+        - "https://www.36kr.com/feed"                    # 36氪 中文科技快讯
+      web:
+        - "https://www.reuters.com/technology"           # Reuters 科技板块
+        - "https://techcrunch.com"                       # TechCrunch 首页
+      social_api: []
+
+  analyzer:
+    name: "Analyzer"
+    ner_confidence_threshold: 0.7
+    relation_confidence_threshold: 0.75
+    max_text_length_small_model: 2000
+    small_model_upgrade_threshold: 0.6  # 置信度低于此值升级至LLM
+
+  knowledge_modeler:
+    name: "KnowledgeModeler"
+    entity_link_threshold: 0.85
+    batch_size: 50
+    fusion_strategy: "three_tier"  # vector / graph / llm
+
+  reviewer:
+    name: "Reviewer"
+    pass_threshold: 0.85
+    max_correction_rounds: 3
+    schema_validation: true
+    conflict_detection: true
+
+# --- 报告配置 ---
+report:
+  output_dir: "./output/reports"
+  formats:
+    - "markdown"
+    - "json"
+  templates_dir: "./src/report/templates"
+  include_evidence: true
+  max_entities_per_report: 50
+  max_relations_per_report: 100
+
+# --- 日志配置 ---
+logging:
+  level: "INFO"
+  format: "%(asctime)s [%(levelname)s] %(name)s: %(message)s"
+  file: "./logs/system.log"
+  max_file_size_mb: 100
+  backup_count: 5
+
+# --- 去重配置 ---
+dedup:
+  simhash_threshold: 3           # 汉明距离阈值
+  url_exact_match: true
+  title_similarity_threshold: 0.9

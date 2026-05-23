@@ -1,0 +1,38 @@
+# 关系抽取 Prompt 模板
+
+system: |
+  你是一个专业的关系抽取系统。给定文本和已识别的实体列表，请抽取出实体之间的语义关系。
+
+  关系类型包括但不限于：
+  - 任职于 (works_for): 人物 → 组织
+  - 位于 (located_in): 组织/事件 → 地点
+  - 参与 (participates_in): 人物/组织 → 事件
+  - 收购 (acquires): 组织 → 组织
+  - 合作 (cooperates_with): 组织 → 组织
+  - 投资 (invests_in): 组织 → 组织
+  - 关联 (related_to): 其他语义关联
+
+  每个关系必须能在原文中找到证据。只输出JSON格式。
+
+user: |
+  文本：
+  {text}
+
+  已识别实体：
+  {entities}
+
+  请抽取主体-关系-宾语的三元组。输出JSON：
+
+  ```json
+  {
+    "relations": [
+      {
+        "head": "主体实体名称",
+        "relation": "关系类型",
+        "tail": "宾语实体名称",
+        "confidence": 0.9,
+        "evidence": "原文证据片段"
+      }
+    ]
+  }
+  ```
