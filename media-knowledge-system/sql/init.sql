@@ -2,11 +2,11 @@
 -- 媒体知识库系统 MySQL 初始化脚本
 -- ============================================================
 
-CREATE DATABASE IF NOT EXISTS media_knowledge_db
+CREATE DATABASE IF NOT EXISTS media_knowledge
   CHARACTER SET utf8mb4
   COLLATE utf8mb4_unicode_ci;
 
-USE media_knowledge_db;
+USE media_knowledge;
 
 -- -------------------------------------------
 -- 原始媒体数据表
@@ -15,7 +15,7 @@ CREATE TABLE raw_articles (
     id BIGINT PRIMARY KEY AUTO_INCREMENT,
     title VARCHAR(500) NOT NULL,
     content LONGTEXT NOT NULL,
-    url VARCHAR(1000) UNIQUE NOT NULL,
+    url VARCHAR(500) UNIQUE NOT NULL,
     source VARCHAR(100) NOT NULL,
     source_type VARCHAR(50) DEFAULT 'web',
     publish_time DATETIME NOT NULL,
