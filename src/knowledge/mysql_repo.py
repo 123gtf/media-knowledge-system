@@ -66,10 +66,16 @@ class MySQLRepository:
                 self._connected = False
         return self._engine
 
+    def _ensure_connected(self) -> bool:
+        """确保数据库已连接（触发懒加载），返回连接状态"""
+        if self._engine is None:
+            _ = self.engine  # 触发懒加载
+        return self._connected
+
     @contextmanager
     def _get_connection(self):
         """获取数据库连接上下文"""
-        if not self._connected:
+        if not self._ensure_connected():
             yield None
             return
 
@@ -86,7 +92,7 @@ class MySQLRepository:
 
     def find_entity_by_name_type(self, name: str, entity_type: str) -> Optional[Dict]:
         """按名称和类型精确查找实体"""
-        if not self._connected:
+        if not self._ensure_connected():
             return None
 
         try:
@@ -111,7 +117,7 @@ class MySQLRepository:
 
     def find_similar_entities(self, name: str, entity_type: str, limit: int = 10) -> List[Dict]:
         """模糊查找相似实体"""
-        if not self._connected:
+        if not self._ensure_connected():
             return []
 
         try:
@@ -138,7 +144,7 @@ class MySQLRepository:
 
     def upsert_entity(self, entity: Dict[str, Any]) -> Optional[int]:
         """插入或更新实体 (ON DUPLICATE KEY UPDATE)，返回实体ID"""
-        if not self._connected:
+        if not self._ensure_connected():
             return None
 
         entity_name = entity.get("name", "")
@@ -181,7 +187,7 @@ class MySQLRepository:
 
     def get_entity_id(self, name: str, entity_type: str) -> Optional[int]:
         """按名称和类型获取实体ID"""
-        if not self._connected:
+        if not self._ensure_connected():
             return None
         try:
             with self._get_connection() as conn:
@@ -203,7 +209,7 @@ class MySQLRepository:
 
     def insert_relation(self, relation: Dict[str, Any]) -> Optional[int]:
         """插入关系记录"""
-        if not self._connected:
+        if not self._ensure_connected():
             return None
 
         try:
@@ -232,7 +238,7 @@ class MySQLRepository:
 
     def get_recent_relations(self, limit: int = 500) -> List[Dict]:
         """获取最近的关关系记录"""
-        if not self._connected:
+        if not self._ensure_connected():
             return []
 
         try:
@@ -271,7 +277,7 @@ class MySQLRepository:
         duration_ms: int = 0,
     ) -> Optional[int]:
         """记录Agent执行日志"""
-        if not self._connected:
+        if not self._ensure_connected():
             return None
 
         try:
@@ -314,7 +320,7 @@ class MySQLRepository:
         json_content: Dict = None,
     ) -> Optional[int]:
         """保存分析报告"""
-        if not self._connected:
+        if not self._ensure_connected():
             return None
 
         try:
@@ -357,7 +363,7 @@ class MySQLRepository:
         confidence: float = 0.0,
     ) -> Optional[int]:
         """保存质检记录"""
-        if not self._connected:
+        if not self._ensure_connected():
             return None
 
         try:

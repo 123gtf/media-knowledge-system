@@ -135,47 +135,59 @@ class KnowledgeModelerAgent(BaseAgent):
             mysql_entities = 0
             mysql_relations = 0
             if self.mysql_repo:
-                # 写入实体，建立 name→id 映射
+                # 写入所有实体并建立 name→id 映射
                 entity_id_map: Dict[str, int] = {}  # "name::type" → mysql_id
                 for e in entities:
                     try:
                         eid = self.mysql_repo.upsert_entity(e)
                         if eid:
-                            key = f"{e.get('name', '')}::{e.get('type', e.get('entity_type', ''))}"
+                            etype = e.get('type', e.get('entity_type', ''))
+                            key = f"{e.get('name', '')}::{etype}"
                             entity_id_map[key] = eid
                             mysql_entities += 1
                     except Exception as ex:
                         logger.warning(f"MySQL实体写入失败: {ex}")
 
-                # 写入关系（用实体ID替换名称）
+                def _resolve_entity_id(name: str) -> Optional[int]:
+                    """三级查找实体ID：映射表 → MySQL精确查 → 自动创建"""
+                    if not name:
+                        return None
+                    # 1. 映射表
+                    for etype in ("ORG", "PER", "LOC", "TIME", "EVENT", "TOPIC", "UNKNOWN"):
+                        eid = entity_id_map.get(f"{name}::{etype}")
+                        if eid:
+                            return eid
+                    # 2. MySQL
+                    for etype in ("ORG", "PER", "LOC", "TIME", "EVENT", "TOPIC", "UNKNOWN"):
+                        eid = self.mysql_repo.get_entity_id(name, etype)
+                        if eid:
+                            entity_id_map[f"{name}::{etype}"] = eid
+                            return eid
+                    # 3. 自动创建
+                    eid = self.mysql_repo.upsert_entity({
+                        "name": name, "type": "UNKNOWN",
+                        "confidence": 0.3, "aliases": [name],
+                    })
+                    if eid:
+                        entity_id_map[f"{name}::UNKNOWN"] = eid
+                    return eid
+
+                # 写入关系
                 for r in relations_list:
                     try:
                         head_name = r.get("head", "")
                         tail_name = r.get("tail", "")
-                        # 尝试多种类型匹配
-                        for etype in ["ORG", "PER", "LOC", "TIME", "EVENT", "TOPIC"]:
-                            head_key = f"{head_name}::{etype}"
-                            tail_key = f"{tail_name}::{etype}"
-                            if head_key in entity_id_map and tail_key in entity_id_map:
-                                r["head_id"] = entity_id_map[head_key]
-                                r["tail_id"] = entity_id_map[tail_key]
-                                break
-                        # 如果映射表中没有，尝试直接查MySQL
-                        if not r.get("head_id"):
-                            for etype in ["ORG", "PER", "LOC", "TIME", "EVENT", "TOPIC"]:
-                                hid = self.mysql_repo.get_entity_id(head_name, etype)
-                                tid = self.mysql_repo.get_entity_id(tail_name, etype)
-                                if hid and tid:
-                                    r["head_id"] = hid
-                                    r["tail_id"] = tid
-                                    break
-                        if r.get("head_id") and r.get("tail_id"):
+                        hid = _resolve_entity_id(head_name)
+                        tid = _resolve_entity_id(tail_name)
+                        if hid and tid:
+                            r["head_id"] = hid
+                            r["tail_id"] = tid
                             self.mysql_repo.insert_relation(r)
                             mysql_relations += 1
                     except Exception as ex:
                         logger.warning(f"MySQL关系写入失败: {ex}")
 
-                if mysql_entities > 0:
+                if mysql_entities > 0 or mysql_relations > 0:
                     logger.info(f"MySQL写入: {mysql_entities} 实体, {mysql_relations} 关系")
 
             # 优先返回MySQL写入数（更可靠），Neo4j作为补充
@@ -209,7 +221,7 @@ class KnowledgeModelerAgent(BaseAgent):
             seen = set()
 
             for rel in new_relations:
-                key = f"{rel.get('head')}|{rel.get('relation')}|{rel.get('tail')}"
+                key = f"{rel.get('head')}|{rel.get('relation', rel.get('relation_type', ''))}|{rel.get('tail')}"
                 if key in seen:
                     continue
                 seen.add(key)
@@ -268,8 +280,9 @@ class KnowledgeModelerAgent(BaseAgent):
         """执行知识建模流程"""
         state.current_stage = "knowledge_modeling"
 
-        # Step 1: 实体链接消歧
-        linked_entities = []
+        # Step 1: 实体链接消歧 + 收集所有实体引用（用于关系ID映射）
+        all_entities: list[dict] = []
+        existing_names: set[str] = set()
         for entity in state.extracted_entities:
             link_result = self.tools["link_entity"].func(
                 entity_name=entity.name,
@@ -277,8 +290,19 @@ class KnowledgeModelerAgent(BaseAgent):
                 aliases=[entity.name],
             )
             link_data = link_result.get("data", {})
-            if link_data.get("is_new"):
-                linked_entities.append(entity.model_dump())
+            entity_dict = entity.model_dump()
+            all_entities.append(entity_dict)
+            existing_names.add(entity.name)
+
+        # Step 1.5: 收集关系中引用的实体（可能不在extracted_entities中，需补全以便解析ID）
+        for rel in state.extracted_relations:
+            for name in (rel.head, rel.tail):
+                if name and name not in existing_names:
+                    all_entities.append({
+                        "name": name, "type": "UNKNOWN",
+                        "confidence": 0.5, "aliases": [name],
+                    })
+                    existing_names.add(name)
 
         # Step 2: 关系融合去重
         new_relations = [r.model_dump() for r in state.extracted_relations]
@@ -297,9 +321,9 @@ class KnowledgeModelerAgent(BaseAgent):
         fused_relations = fusion_data.get("relations", [])
         conflicts = fusion_data.get("conflicts", [])
 
-        # Step 3: 图谱更新
+        # Step 3: 图谱更新（传入全部实体用于ID映射）
         graph_result = self.tools["update_graph"].func(
-            entities=linked_entities,
+            entities=all_entities,
             relations=fused_relations,
             batch_size=50,
         )
