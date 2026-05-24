@@ -86,6 +86,103 @@ class MySQLRepository:
             logger.error(f"数据库操作失败: {e}")
             yield None
 
+    @staticmethod
+    def _parse_datetime(dt_str: str) -> str:
+        """将多种时间格式转为 MySQL DATETIME 格式 (YYYY-MM-DD HH:MM:SS)"""
+        if not dt_str:
+            return datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        try:
+            from dateutil import parser as dateutil_parser
+            dt = dateutil_parser.parse(dt_str)
+            return dt.strftime("%Y-%m-%d %H:%M:%S")
+        except ImportError:
+            pass
+        except Exception:
+            pass
+        # 回退：尝试常见格式
+        from datetime import datetime as dt_cls
+        for fmt in [
+            "%Y-%m-%dT%H:%M:%S",
+            "%Y-%m-%d %H:%M:%S",
+            "%a, %d %b %Y %H:%M:%S %z",
+            "%a, %d %b %Y %H:%M:%S %Z",
+            "%Y-%m-%d",
+        ]:
+            try:
+                return dt_cls.strptime(dt_str, fmt).strftime("%Y-%m-%d %H:%M:%S")
+            except ValueError:
+                continue
+        return dt_cls.now().strftime("%Y-%m-%d %H:%M:%S")
+
+    # ========================================
+    # 文章操作
+    # ========================================
+
+    def insert_raw_article(self, article: Dict[str, Any]) -> Optional[int]:
+        """插入原始文章，返回自增ID"""
+        if not self._ensure_connected():
+            return None
+        try:
+            with self._get_connection() as conn:
+                if conn is None:
+                    return None
+                from sqlalchemy import text
+                import json as json_module
+                result = conn.execute(
+                    text(
+                        "INSERT INTO raw_articles (title, content, url, source, source_type, "
+                        "publish_time, checksum, language) "
+                        "VALUES (:title, :content, :url, :source, :source_type, :publish_time, "
+                        ":checksum, :language) "
+                        "ON DUPLICATE KEY UPDATE fetch_time = NOW()"
+                    ),
+                    {
+                        "title": article.get("title", ""),
+                        "content": article.get("content", ""),
+                        "url": article.get("url", ""),
+                        "source": article.get("source", ""),
+                        "source_type": article.get("source_type", "web"),
+                        "publish_time": self._parse_datetime(article.get("publish_time", "")),
+                        "checksum": article.get("id", article.get("checksum", "")),
+                        "language": article.get("language", "zh"),
+                    },
+                )
+                conn.commit()
+                return result.lastrowid
+        except Exception as e:
+            logger.warning(f"原始文章插入失败 [{article.get('title', '')[:30]}]: {e}")
+            return None
+
+    def insert_cleaned_article(self, raw_article_id: int, article: Dict[str, Any]) -> Optional[int]:
+        """插入清洗后文章"""
+        if not self._ensure_connected():
+            return None
+        try:
+            with self._get_connection() as conn:
+                if conn is None:
+                    return None
+                from sqlalchemy import text
+                result = conn.execute(
+                    text(
+                        "INSERT INTO cleaned_articles (raw_article_id, clean_title, clean_content, "
+                        "publish_time, word_count) "
+                        "VALUES (:raw_id, :title, :content, :publish_time, :word_count) "
+                        "ON DUPLICATE KEY UPDATE clean_content = VALUES(clean_content)"
+                    ),
+                    {
+                        "raw_id": raw_article_id,
+                        "title": article.get("title", ""),
+                        "content": article.get("content", ""),
+                        "publish_time": self._parse_datetime(article.get("publish_time", "")),
+                        "word_count": len(article.get("content", "")) if article.get("content") else 0,
+                    },
+                )
+                conn.commit()
+                return result.lastrowid
+        except Exception as e:
+            logger.warning(f"清洗文章插入失败 [{article.get('title', '')[:30]}]: {e}")
+            return None
+
     # ========================================
     # 实体操作
     # ========================================

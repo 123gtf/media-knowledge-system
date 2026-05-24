@@ -31,14 +31,15 @@ logger = logging.getLogger(__name__)
 class CollectorAgent(BaseAgent):
     """采集管理Agent —— 多源数据抓取与清洗"""
 
-    def __init__(self, llm_client: Any, cleaner: Any = None):
+    def __init__(self, llm_client: Any, cleaner: Any = None, mysql_repo: Any = None):
         super().__init__(
             name="Collector",
             role="采集管理Agent",
-            goal="根据任务调度采集多源媒体数据，执行去重与正文清洗",
+            goal="根据任务调度采集多源媒体数据，执行去重与正文清洗，同时持久化到MySQL",
             llm_client=llm_client,
         )
         self.cleaner = cleaner
+        self.mysql_repo = mysql_repo
         self._seen_checksums: set = set()
 
         self.register_tool(self._create_rss_tool())
@@ -320,6 +321,15 @@ class CollectorAgent(BaseAgent):
 
         logger.info(f"[Collector] 采集到 {total_fetched} 篇原始文章")
 
+        # --- 持久化原始文章到 MySQL ---
+        raw_id_map: dict = {}  # doc.id → raw_article DB id
+        if self.mysql_repo:
+            for doc in state.raw_documents:
+                raw_id = self.mysql_repo.insert_raw_article(doc.model_dump())
+                if raw_id:
+                    raw_id_map[doc.id] = raw_id
+            logger.info(f"[Collector] MySQL原始文章入库: {len(raw_id_map)} 篇")
+
         # 执行清洗
         for doc in state.raw_documents:
             if doc.id in {d.id for d in state.cleaned_documents}:
@@ -338,6 +348,17 @@ class CollectorAgent(BaseAgent):
                     language=doc.language,
                 )
                 state.cleaned_documents.append(clean_doc)
+
+        # --- 持久化清洗文章到 MySQL ---
+        if self.mysql_repo:
+            cleaned_saved = 0
+            for doc in state.cleaned_documents:
+                raw_id = raw_id_map.get(doc.id)
+                if raw_id:
+                    cid = self.mysql_repo.insert_cleaned_article(raw_id, doc.model_dump())
+                    if cid:
+                        cleaned_saved += 1
+            logger.info(f"[Collector] MySQL清洗文章入库: {cleaned_saved} 篇")
 
         self._log_action(state, "fetch_and_clean", {
             "sources_count": len(sources),

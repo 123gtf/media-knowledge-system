@@ -122,7 +122,7 @@ async def build_agents(llm_client: LLMClient, prompt_manager: PromptManager, con
     agents = {
         "orchestrator": OrchestratorAgent(llm_client, prompt_manager),
         "planner": PlannerAgent(llm_client),
-        "collector": CollectorAgent(llm_client, cleaner),
+        "collector": CollectorAgent(llm_client, cleaner, mysql_repo),
         "analyzer": AnalyzerAgent(llm_client, small_model_ner=NERExtractor(engine="rule")),
         "knowledge_modeler": KnowledgeModelerAgent(llm_client, mysql_repo, graph_store),
         "reviewer": ReviewerAgent(llm_client, mysql_repo),
