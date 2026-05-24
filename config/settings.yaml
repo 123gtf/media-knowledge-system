@@ -42,7 +42,7 @@ mysql:
 neo4j:
   uri: "bolt://localhost:7687"
   user: "neo4j"
-  password: "${NEO4J_PASSWORD}"
+  password: "757338976210"
   database: "neo4j"
   max_connection_lifetime: 3600
   max_connection_pool_size: 20

@@ -153,23 +153,23 @@ class KnowledgeModelerAgent(BaseAgent):
                     if not name:
                         return None
                     # 1. 映射表
-                    for etype in ("ORG", "PER", "LOC", "TIME", "EVENT", "TOPIC", "UNKNOWN"):
+                    for etype in ("ORG", "PER", "LOC", "TIME", "EVENT", "TOPIC"):
                         eid = entity_id_map.get(f"{name}::{etype}")
                         if eid:
                             return eid
                     # 2. MySQL
-                    for etype in ("ORG", "PER", "LOC", "TIME", "EVENT", "TOPIC", "UNKNOWN"):
+                    for etype in ("ORG", "PER", "LOC", "TIME", "EVENT", "TOPIC"):
                         eid = self.mysql_repo.get_entity_id(name, etype)
                         if eid:
                             entity_id_map[f"{name}::{etype}"] = eid
                             return eid
                     # 3. 自动创建
                     eid = self.mysql_repo.upsert_entity({
-                        "name": name, "type": "UNKNOWN",
+                        "name": name, "type": "TOPIC",
                         "confidence": 0.3, "aliases": [name],
                     })
                     if eid:
-                        entity_id_map[f"{name}::UNKNOWN"] = eid
+                        entity_id_map[f"{name}::TOPIC"] = eid
                     return eid
 
                 # 写入关系
@@ -299,7 +299,7 @@ class KnowledgeModelerAgent(BaseAgent):
             for name in (rel.head, rel.tail):
                 if name and name not in existing_names:
                     all_entities.append({
-                        "name": name, "type": "UNKNOWN",
+                        "name": name, "type": "TOPIC",
                         "confidence": 0.5, "aliases": [name],
                     })
                     existing_names.add(name)

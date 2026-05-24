@@ -104,7 +104,19 @@ async def build_agents(llm_client: LLMClient, prompt_manager: PromptManager, con
         database=mysql_cfg.get("database", "media_knowledge_db"),
         charset=mysql_cfg.get("charset", "utf8mb4"),
     )
-    graph_store = GraphStore()
+    # 读取 Neo4j 配置
+    neo4j_cfg = config.get("neo4j", {})
+    neo4j_password = neo4j_cfg.get("password", "password")
+    if neo4j_password.startswith("${") and neo4j_password.endswith("}"):
+        import os
+        neo4j_password = os.environ.get(neo4j_password[2:-1], "password")
+
+    graph_store = GraphStore(
+        uri=neo4j_cfg.get("uri", "bolt://localhost:7687"),
+        user=neo4j_cfg.get("user", "neo4j"),
+        password=neo4j_password,
+        database=neo4j_cfg.get("database", "neo4j"),
+    )
     cleaner = DataCleaner()
 
     agents = {

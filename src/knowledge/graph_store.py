@@ -53,9 +53,15 @@ class GraphStore:
                 self._connected = False
         return self._driver
 
+    def _ensure_connected(self) -> bool:
+        """触发懒加载，返回连接状态"""
+        if self._driver is None:
+            _ = self.driver  # 触发 property 懒加载
+        return self._connected
+
     def _execute(self, cypher: str, params: Dict = None) -> List[Dict]:
         """执行Cypher查询"""
-        if not self._connected or self._driver is None:
+        if not self._ensure_connected():
             logger.debug(f"[Mock] Cypher: {cypher[:100]}...")
             return []
 
@@ -118,17 +124,17 @@ class GraphStore:
     def upsert_relation(
         self,
         head_name: str,
-        head_type: str,
-        tail_name: str,
-        tail_type: str,
-        relation_type: str,
+        head_type: str = "TOPIC",
+        tail_name: str = "",
+        tail_type: str = "TOPIC",
+        relation_type: str = "related_to",
         confidence: float = 0.8,
         evidence: str = "",
     ) -> bool:
-        """创建或更新关系边"""
+        """创建或更新关系边（按名称匹配实体，不要求类型）"""
         cypher = """
-        MATCH (h:Entity {name: $head_name, type: $head_type})
-        MATCH (t:Entity {name: $tail_name, type: $tail_type})
+        MATCH (h:Entity {name: $head_name})
+        MATCH (t:Entity {name: $tail_name})
         MERGE (h)-[r:RELATED_TO {type: $relation_type}]->(t)
         ON CREATE SET
             r.confidence = $confidence,
@@ -143,9 +149,7 @@ class GraphStore:
         """
         results = self._execute(cypher, {
             "head_name": head_name,
-            "head_type": head_type,
             "tail_name": tail_name,
-            "tail_type": tail_type,
             "relation_type": relation_type,
             "confidence": confidence,
             "evidence": evidence,
@@ -158,9 +162,7 @@ class GraphStore:
         for r in relations:
             success = self.upsert_relation(
                 head_name=r.get("head", ""),
-                head_type=r.get("head_type", "TOPIC"),
                 tail_name=r.get("tail", ""),
-                tail_type=r.get("tail_type", "TOPIC"),
                 relation_type=r.get("relation", r.get("relation_type", "related_to")),
                 confidence=r.get("confidence", 0.8),
                 evidence=r.get("evidence", ""),
