@@ -1,3 +1,4 @@
+import argparse
 import asyncio
 import logging
 import sys
@@ -76,37 +77,16 @@ async def build_agents(llm_client: LLMClient, prompt_manager: PromptManager, con
 
 
 async def main():
-    """主函数"""
+    """主函数 —— 批量管线模式"""
     logger.info("=" * 60)
     logger.info("多智能体协同媒体数据分析与知识库构建系统 启动中...")
     logger.info("=" * 60)
 
-    # 读取配置文件
-    import yaml
-    config_path = Path(__file__).parent / "config" / "settings.yaml"
-    with open(config_path, "r", encoding="utf-8") as f:
-        config = yaml.safe_load(f)
-
-    # 读取运行模式
+    config = load_config()
     run_mode = config.get("mode", "demo")
     logger.info(f"运行模式: {run_mode}")
 
-    llm_cfg = config.get("llm", {})
-    api_key = llm_cfg.get("api_key", "")
-    # 去掉 ${} 包装（如果用户误用了环境变量语法）
-    if api_key.startswith("${") and api_key.endswith("}"):
-        api_key = api_key[2:-1]
-
-    # 初始化 LLM 客户端（从配置文件读取参数）
-    llm_client = LLMClient(
-        provider=llm_cfg.get("provider", "anthropic"),
-        model=llm_cfg.get("model", "claude-sonnet-4-6"),
-        api_key=api_key,
-        base_url=llm_cfg.get("base_url", ""),
-        max_tokens=llm_cfg.get("max_tokens", 4096),
-        temperature=llm_cfg.get("temperature", 0.1),
-        request_timeout=llm_cfg.get("request_timeout", 60),
-    )
+    llm_client = build_llm_client(config)
     logger.info(f"LLM: provider={llm_client.provider}, model={llm_client.model}, "
                 f"key={'已设置' if llm_client.api_key else '未设置'}")
 
@@ -170,5 +150,82 @@ async def main():
         sys.exit(1)
 
 
+def load_config() -> dict:
+    """加载配置文件"""
+    import yaml
+    config_path = Path(__file__).parent / "config" / "settings.yaml"
+    with open(config_path, "r", encoding="utf-8") as f:
+        return yaml.safe_load(f)
+
+
+def build_llm_client(config: dict) -> LLMClient:
+    """从配置构建 LLM 客户端"""
+    llm_cfg = config.get("llm", {})
+    api_key = llm_cfg.get("api_key", "")
+    if api_key.startswith("${") and api_key.endswith("}"):
+        api_key = api_key[2:-1]
+
+    return LLMClient(
+        provider=llm_cfg.get("provider", "anthropic"),
+        model=llm_cfg.get("model", "claude-sonnet-4-6"),
+        api_key=api_key,
+        base_url=llm_cfg.get("base_url", ""),
+        max_tokens=llm_cfg.get("max_tokens", 4096),
+        temperature=llm_cfg.get("temperature", 0.1),
+        request_timeout=llm_cfg.get("request_timeout", 60),
+    )
+
+
+def build_graph_store(config: dict) -> GraphStore:
+    """从配置构建图谱存储"""
+    neo4j_cfg = config.get("neo4j", {})
+    neo4j_password = neo4j_cfg.get("password", "password")
+    if neo4j_password.startswith("${") and neo4j_password.endswith("}"):
+        import os
+        neo4j_password = os.environ.get(neo4j_password[2:-1], "password")
+
+    return GraphStore(
+        uri=neo4j_cfg.get("uri", "http://localhost:7687"),
+        user=neo4j_cfg.get("user", "neo4j"),
+        password=neo4j_password,
+        database=neo4j_cfg.get("database", "neo4j"),
+    )
+
+
+def chat_mode(port: int = 7860, share: bool = False):
+    """启动对话交互界面"""
+    from src.agents.dialogue_manager import DialogueManager
+    from src.ui.app import launch_app
+
+    logger.info("=" * 60)
+    logger.info("启动对话交互模式")
+    logger.info("=" * 60)
+
+    config = load_config()
+    llm_client = build_llm_client(config)
+    logger.info(f"LLM: provider={llm_client.provider}, model={llm_client.model}, "
+                f"key={'已设置' if llm_client.api_key else '未设置（Mock模式）'}")
+
+    graph_store = build_graph_store(config)
+    prompt_manager = PromptManager()
+
+    dialogue_manager = DialogueManager(
+        llm_client=llm_client,
+        graph_store=graph_store,
+        prompt_manager=prompt_manager,
+    )
+
+    launch_app(dialogue_manager, port=port, share=share)
+
+
 if __name__ == "__main__":
-    asyncio.run(main())
+    parser = argparse.ArgumentParser(description="多智能体协同媒体数据分析与知识库构建系统")
+    parser.add_argument("--chat", action="store_true", help="启动对话交互界面")
+    parser.add_argument("--port", type=int, default=7860, help="对话界面端口 (默认7860)")
+    parser.add_argument("--share", action="store_true", help="创建 Gradio 公网链接")
+    args = parser.parse_args()
+
+    if args.chat:
+        chat_mode(port=args.port, share=args.share)
+    else:
+        asyncio.run(main())

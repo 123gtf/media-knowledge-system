@@ -10,7 +10,7 @@ llm:
   provider: "openai"              # anthropic / openai (DeepSeek用openai兼容模式)
   model: "deepseek-chat"          # 主力模型
   fallback_model: "deepseek-chat"  # 降级模型
-  api_key: "***********"
+  api_key: "sk-445542f78a464cf299f500d850ddfa48"
   base_url: "https://api.deepseek.com/v1"
   max_tokens: 4096
   temperature: 0.1               # 抽取类任务低温度
@@ -32,7 +32,7 @@ mysql:
   host: "localhost"
   port: 3306
   user: "root"
-  password: "****"     # 直接填密码，或设置环境变量 MYSQL_PASSWORD
+  password: "123456"     # 直接填密码，或设置环境变量 MYSQL_PASSWORD
   database: "media_knowledge"
   charset: "utf8mb4"
   pool_size: 10
@@ -42,7 +42,7 @@ mysql:
 neo4j:
   uri: "bolt://localhost:7687"
   user: "neo4j"
-  password: "****"  #直接填密码
+  password: "757338976210"  #直接填密码
   database: "neo4j"
   max_connection_lifetime: 3600
   max_connection_pool_size: 20

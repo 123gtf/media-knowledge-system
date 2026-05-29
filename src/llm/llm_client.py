@@ -14,7 +14,7 @@ import json
 import logging
 import os
 import time
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Optional
 
 logger = logging.getLogger(__name__)
 
@@ -125,6 +125,107 @@ class LLMClient:
 
         return self._mock_response(prompt)
 
+    def chat(
+        self,
+        messages: List[Dict[str, str]],
+        max_tokens: Optional[int] = None,
+        temperature: Optional[float] = None,
+        max_retries: int = 2,
+    ) -> str:
+        """
+        多轮对话调用
+
+        Args:
+            messages: 对话历史，格式 [{"role": "system/user/assistant", "content": "..."}]
+            max_tokens: 最大输出token数
+            temperature: 温度参数
+            max_retries: 最大重试次数
+
+        Returns:
+            LLM响应文本
+        """
+        if not self.api_key:
+            logger.warning("API Key未配置，返回Mock响应")
+            last_user = next((m["content"] for m in reversed(messages) if m["role"] == "user"), "")
+            return self._mock_response(last_user)
+
+        if not self.client:
+            logger.warning(f"{self.provider}客户端不可用，返回Mock响应")
+            last_user = next((m["content"] for m in reversed(messages) if m["role"] == "user"), "")
+            return self._mock_response(last_user)
+
+        for attempt in range(max_retries + 1):
+            try:
+                if self.provider == "anthropic":
+                    return self._chat_anthropic(messages, max_tokens, temperature)
+                elif self.provider == "openai":
+                    return self._chat_openai(messages, max_tokens, temperature)
+            except Exception as e:
+                logger.warning(
+                    f"LLM多轮对话调用失败 (attempt {attempt + 1}/{max_retries + 1}): {e}"
+                )
+                if attempt < max_retries:
+                    time.sleep(2 ** attempt)
+                else:
+                    logger.error("LLM多轮对话最终失败，返回Mock响应")
+                    last_user = next((m["content"] for m in reversed(messages) if m["role"] == "user"), "")
+                    return self._mock_response(last_user)
+
+        return ""
+
+    def _chat_anthropic(
+        self,
+        messages: List[Dict[str, str]],
+        max_tokens: Optional[int] = None,
+        temperature: Optional[float] = None,
+    ) -> str:
+        """Anthropic 多轮对话"""
+        # Anthropic 要求 system 单独传，不能放在 messages 里
+        system = ""
+        anthropic_messages = []
+        for msg in messages:
+            if msg["role"] == "system":
+                system = msg["content"]
+            else:
+                anthropic_messages.append({"role": msg["role"], "content": msg["content"]})
+
+        kwargs = {
+            "model": self.model,
+            "max_tokens": max_tokens or self.max_tokens,
+            "messages": anthropic_messages,
+        }
+        if system:
+            kwargs["system"] = system
+        kwargs["temperature"] = temperature if temperature is not None else self.temperature
+
+        response = self.client.messages.create(**kwargs)
+
+        usage = response.usage
+        self.total_tokens += usage.input_tokens + usage.output_tokens
+        self.call_count += 1
+
+        return response.content[0].text
+
+    def _chat_openai(
+        self,
+        messages: List[Dict[str, str]],
+        max_tokens: Optional[int] = None,
+        temperature: Optional[float] = None,
+    ) -> str:
+        """OpenAI 多轮对话"""
+        response = self.client.chat.completions.create(
+            model=self.model,
+            messages=messages,
+            max_tokens=max_tokens or self.max_tokens,
+            temperature=temperature if temperature is not None else self.temperature,
+        )
+
+        usage = response.usage
+        self.total_tokens += usage.prompt_tokens + usage.completion_tokens
+        self.call_count += 1
+
+        return response.choices[0].message.content
+
     def _call_anthropic(
         self,
         prompt: str,
@@ -201,8 +302,12 @@ class LLMClient:
             return json.dumps({"decision": "undecided", "confidence": 0.5, "reason": "LLM未配置"}, ensure_ascii=False)
         elif "review" in prompt_lower or "审核" in prompt:
             return json.dumps({"passed": True, "overall_confidence": 0.8, "issues": []}, ensure_ascii=False)
+        elif "追问" in prompt or "clarify" in prompt_lower or "followup" in prompt_lower:
+            return "您能具体说明一下想了解哪个方面吗？比如具体的时间范围、特定的实体或事件类型。"
         elif "report" in prompt_lower or "报告" in prompt:
             return "# Mock报告\n\nLLM未配置，请设置API Key。"
+        elif "对话" in prompt or "问答" in prompt or "回答" in prompt or "answer" in prompt_lower:
+            return "这是一个Mock回答（LLM未配置）。请配置ANTHROPIC_API_KEY或OPENAI_API_KEY环境变量以获取真实回答。"
         else:
             return json.dumps({"result": "mock", "note": "LLM not configured"}, ensure_ascii=False)
 

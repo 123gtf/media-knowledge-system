@@ -32,6 +32,10 @@ class GraphStore:
         self._driver = None
         self._connected = False
 
+        # 内存模拟（Neo4j不可用时的降级方案）
+        self._mem_entities: Dict[str, Dict] = {}    # name -> {type, confidence, mention_count}
+        self._mem_relations: List[Dict] = []         # [{head, tail, relation_type, confidence, evidence}]
+
     @property
     def driver(self):
         """懒加载Neo4j驱动"""
@@ -81,6 +85,22 @@ class GraphStore:
         aliases: List[str] = None,
     ) -> Optional[int]:
         """创建或更新实体节点 (MERGE语义)"""
+        # 始终写入内存
+        if name in self._mem_entities:
+            ent = self._mem_entities[name]
+            ent["mention_count"] = ent.get("mention_count", 0) + 1
+            if ent.get("confidence", 0) < confidence:
+                ent["confidence"] = confidence
+        else:
+            self._mem_entities[name] = {
+                "name": name,
+                "type": entity_type,
+                "confidence": confidence,
+                "mention_count": 1,
+                "aliases": aliases or [],
+            }
+
+        # Neo4j 写入
         cypher = """
         MERGE (e:Entity {name: $name, type: $type})
         ON CREATE SET
@@ -132,6 +152,28 @@ class GraphStore:
         evidence: str = "",
     ) -> bool:
         """创建或更新关系边（按名称匹配实体，不要求类型）"""
+        # 始终写入内存
+        found = False
+        for r in self._mem_relations:
+            if r["head"] == head_name and r["tail"] == tail_name and r["relation_type"] == relation_type:
+                r["count"] = r.get("count", 1) + 1
+                if r.get("confidence", 0) < confidence:
+                    r["confidence"] = confidence
+                found = True
+                break
+        if not found:
+            self._mem_relations.append({
+                "head": head_name,
+                "head_type": head_type,
+                "tail": tail_name,
+                "tail_type": tail_type,
+                "relation_type": relation_type,
+                "confidence": confidence,
+                "evidence": evidence,
+                "count": 1,
+            })
+
+        # Neo4j 写入
         cypher = """
         MATCH (h:Entity {name: $head_name})
         MATCH (t:Entity {name: $tail_name})
@@ -154,7 +196,7 @@ class GraphStore:
             "confidence": confidence,
             "evidence": evidence,
         })
-        return len(results) > 0
+        return len(results) > 0 or not found
 
     def batch_upsert_relations(self, relations: List[Dict]) -> Dict[str, int]:
         """批量更新关系"""
@@ -180,6 +222,7 @@ class GraphStore:
         limit: int = 5,
     ) -> List[Dict]:
         """查找名称相似的实体（向量检索的简化版：名称模糊匹配）"""
+        # Neo4j 查询
         cypher = """
         MATCH (e:Entity)
         WHERE toLower(e.name) CONTAINS toLower($name)
@@ -194,11 +237,30 @@ class GraphStore:
         ORDER BY e.mention_count DESC
         LIMIT $limit
         """
-        return self._execute(cypher, {
+        results = self._execute(cypher, {
             "name": name,
             "type": entity_type,
             "limit": limit,
         })
+
+        # 内存 fallback
+        if not results and self._mem_entities:
+            name_lower = name.lower()
+            for ent in self._mem_entities.values():
+                ent_name = ent.get("name", "").lower()
+                if name_lower in ent_name or ent_name in name_lower:
+                    if entity_type and ent.get("type") != entity_type:
+                        continue
+                    results.append({
+                        "name": ent["name"],
+                        "type": ent.get("type", ""),
+                        "confidence": ent.get("confidence", 0),
+                        "mention_count": ent.get("mention_count", 0),
+                    })
+            results.sort(key=lambda x: x.get("mention_count", 0), reverse=True)
+            results = results[:limit]
+
+        return results
 
     def get_subgraph(self, entity_name: str, depth: int = 2) -> Dict[str, Any]:
         """获取实体的邻域子图"""
@@ -231,6 +293,17 @@ class GraphStore:
                     "relation_type": rels.get("type", "related_to"),
                     "confidence": rels.get("confidence", 0.8),
                 })
+
+        # 内存 fallback
+        if not results and self._mem_relations:
+            for rel in self._mem_relations:
+                if rel["head"] == entity_name or rel["tail"] == entity_name:
+                    other = rel["tail"] if rel["head"] == entity_name else rel["head"]
+                    nodes.add((other, rel.get("tail_type", rel.get("head_type", ""))))
+                    edges.append({
+                        "relation_type": rel.get("relation_type", "related_to"),
+                        "confidence": rel.get("confidence", 0.8),
+                    })
 
         return {
             "nodes": [{"name": n, "type": t} for n, t in nodes],
@@ -268,6 +341,65 @@ class GraphStore:
         LIMIT 50
         """
         return self._execute(cypher, {"name": entity_name})
+
+    def load_demo_data(self):
+        """加载演示数据到图谱（用于对话模式）"""
+        if self._mem_entities:
+            return  # 已有数据，跳过
+
+        # 实体数据
+        entities = [
+            {"name": "OpenAI", "type": "ORG", "confidence": 0.95},
+            {"name": "GPT-5", "type": "TOPIC", "confidence": 0.95},
+            {"name": "Sam Altman", "type": "PER", "confidence": 0.95},
+            {"name": "微软", "type": "ORG", "confidence": 0.9},
+            {"name": "Google DeepMind", "type": "ORG", "confidence": 0.9},
+            {"name": "Demis Hassabis", "type": "PER", "confidence": 0.9},
+            {"name": "阿里巴巴", "type": "ORG", "confidence": 0.95},
+            {"name": "上海", "type": "LOC", "confidence": 0.9},
+            {"name": "吴泳铭", "type": "PER", "confidence": 0.9},
+            {"name": "腾讯", "type": "ORG", "confidence": 0.9},
+            {"name": "百度", "type": "ORG", "confidence": 0.9},
+            {"name": "字节跳动", "type": "ORG", "confidence": 0.95},
+            {"name": "豆包2.0", "type": "TOPIC", "confidence": 0.95},
+            {"name": "梁汝波", "type": "PER", "confidence": 0.9},
+            {"name": "混元大模型", "type": "TOPIC", "confidence": 0.9},
+            {"name": "文心一言", "type": "TOPIC", "confidence": 0.9},
+            {"name": "商汤科技", "type": "ORG", "confidence": 0.85},
+            {"name": "昆仑万维", "type": "ORG", "confidence": 0.85},
+            {"name": "Azure", "type": "TOPIC", "confidence": 0.85},
+            {"name": "Gemini", "type": "TOPIC", "confidence": 0.85},
+        ]
+        for e in entities:
+            self.upsert_entity(e["name"], e["type"], e["confidence"])
+
+        # 关系数据
+        relations = [
+            {"head": "Sam Altman", "tail": "OpenAI", "relation_type": "works_for", "confidence": 0.95, "evidence": "OpenAI CEO"},
+            {"head": "OpenAI", "tail": "GPT-5", "relation_type": "release", "confidence": 0.95, "evidence": "发布GPT-5"},
+            {"head": "微软", "tail": "OpenAI", "relation_type": "invests_in", "confidence": 0.9, "evidence": "最大投资方"},
+            {"head": "微软", "tail": "Azure", "relation_type": "related_to", "confidence": 0.9, "evidence": "Azure云平台"},
+            {"head": "Demis Hassabis", "tail": "Google DeepMind", "relation_type": "works_for", "confidence": 0.9, "evidence": "首席执行官"},
+            {"head": "Google DeepMind", "tail": "Gemini", "relation_type": "release", "confidence": 0.85, "evidence": "开发Gemini模型"},
+            {"head": "阿里巴巴", "tail": "上海", "relation_type": "located_in", "confidence": 0.9, "evidence": "上海AI研究院"},
+            {"head": "吴泳铭", "tail": "阿里巴巴", "relation_type": "works_for", "confidence": 0.9, "evidence": "阿里巴巴CEO"},
+            {"head": "腾讯", "tail": "混元大模型", "relation_type": "release", "confidence": 0.9, "evidence": "混元大模型"},
+            {"head": "百度", "tail": "文心一言", "relation_type": "release", "confidence": 0.9, "evidence": "文心一言4.0"},
+            {"head": "字节跳动", "tail": "豆包2.0", "relation_type": "release", "confidence": 0.95, "evidence": "推出豆包2.0"},
+            {"head": "梁汝波", "tail": "字节跳动", "relation_type": "works_for", "confidence": 0.9, "evidence": "字节跳动CEO"},
+            {"head": "商汤科技", "tail": "豆包2.0", "relation_type": "related_to", "confidence": 0.7, "evidence": "AI助手竞争"},
+            {"head": "昆仑万维", "tail": "豆包2.0", "relation_type": "related_to", "confidence": 0.7, "evidence": "AI助手竞争"},
+        ]
+        for r in relations:
+            self.upsert_relation(
+                head_name=r["head"],
+                tail_name=r["tail"],
+                relation_type=r["relation_type"],
+                confidence=r["confidence"],
+                evidence=r["evidence"],
+            )
+
+        logger.info(f"演示数据已加载: {len(self._mem_entities)} 实体, {len(self._mem_relations)} 关系")
 
     def close(self):
         """关闭连接"""

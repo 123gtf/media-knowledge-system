@@ -28,6 +28,9 @@ readability-lxml>=0.8.0
 openai>=1.0.0
 anthropic>=0.30.0
 
+# --- 对话界面 ---
+gradio>=4.0.0
+
 # --- 工具库 ---
 pyyaml>=6.0
 python-dotenv>=1.0.0
