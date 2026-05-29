@@ -6,8 +6,8 @@ from pathlib import Path
 
 import pytest
 
-# 添加 src 到路径
-sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
+# 添加项目根目录到路径（使 from src.xxx 可用）
+sys.path.insert(0, str(Path(__file__).parent.parent))
 
 
 @pytest.fixture

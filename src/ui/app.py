@@ -9,7 +9,6 @@ Gradio 对话交互界面
 """
 from __future__ import annotations
 
-import asyncio
 import logging
 from typing import Any, List, Tuple
 
@@ -33,6 +32,9 @@ def create_app(dialogue_manager: Any) -> Any:
             "gradio 未安装，请运行: pip install gradio>=4.0.0"
         )
 
+    # 用于"自由对话"模式的简易历史（不走知识检索）
+    _free_chat_history: List[Dict[str, str]] = []
+
     # ---- 事件处理函数 ----
 
     async def respond(
@@ -49,15 +51,20 @@ def create_app(dialogue_manager: Any) -> Any:
         if not user_message.strip():
             return "", chat_history, ""
 
-        if mode == "知识问答":
-            result = await dialogue_manager.chat(user_message)
-            answer = result["answer"]
-            sources = result["sources"]
-        else:
-            # 自由对话：直接调用 LLM，不检索知识
-            dialogue_manager.history.append({"role": "user", "content": user_message})
-            answer = dialogue_manager.llm.chat(dialogue_manager.history)
-            dialogue_manager.history.append({"role": "assistant", "content": answer})
+        try:
+            if mode == "知识问答":
+                result = await dialogue_manager.chat(user_message)
+                answer = result["answer"]
+                sources = result["sources"]
+            else:
+                # 自由对话：不经过知识检索，单独维护历史
+                _free_chat_history.append({"role": "user", "content": user_message})
+                answer = dialogue_manager.llm.chat(_free_chat_history)
+                _free_chat_history.append({"role": "assistant", "content": answer})
+                sources = []
+        except Exception as e:
+            logger.error(f"对话处理异常: {e}", exc_info=True)
+            answer = f"抱歉，处理您的问题时出现了错误：{e}"
             sources = []
 
         # 更新对话历史
@@ -71,6 +78,7 @@ def create_app(dialogue_manager: Any) -> Any:
     def clear_chat() -> Tuple[List, str]:
         """清空对话"""
         dialogue_manager.reset()
+        _free_chat_history.clear()
         return [], ""
 
     # ---- 构建界面 ----
@@ -104,7 +112,7 @@ def create_app(dialogue_manager: Any) -> Any:
                 with gr.Row():
                     msg_input = gr.Textbox(
                         label="输入问题",
-                        placeholder="请输入您的问题，例如：最近AI行业有什么新闻？",
+                        placeholder="请输入您的问题，例如：OpenAI最近发布了什么？",
                         lines=1,
                         scale=4,
                         show_label=False,

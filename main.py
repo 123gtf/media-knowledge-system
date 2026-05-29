@@ -8,7 +8,6 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent / "src"))
 
 from src.agents.graph_orchestrator import GraphOrchestrator
-from src.agents.orchestrator import OrchestratorAgent
 from src.agents.planner import PlannerAgent
 from src.agents.collector import CollectorAgent
 from src.agents.analyzer import AnalyzerAgent
@@ -31,7 +30,7 @@ logger = logging.getLogger("main")
 
 
 
-async def build_agents(llm_client: LLMClient, prompt_manager: PromptManager, config: dict):
+async def build_agents(llm_client: LLMClient, config: dict):
     """构建所有 Agent 实例"""
     # 读取 MySQL 配置
     mysql_cfg = config.get("mysql", {})
@@ -66,7 +65,6 @@ async def build_agents(llm_client: LLMClient, prompt_manager: PromptManager, con
     cleaner = DataCleaner()
 
     agents = {
-        "orchestrator": OrchestratorAgent(llm_client, prompt_manager),
         "planner": PlannerAgent(llm_client),
         "collector": CollectorAgent(llm_client, cleaner, mysql_repo),
         "analyzer": AnalyzerAgent(llm_client, small_model_ner=NERExtractor(engine="rule")),
@@ -90,10 +88,8 @@ async def main():
     logger.info(f"LLM: provider={llm_client.provider}, model={llm_client.model}, "
                 f"key={'已设置' if llm_client.api_key else '未设置'}")
 
-    prompt_manager = PromptManager()
-
     # 构建 Agent 集群
-    agents = await build_agents(llm_client, prompt_manager, config)
+    agents = await build_agents(llm_client, config)
     logger.info(f"已初始化 {len(agents)} 个 Agent: {list(agents.keys())}")
 
     # 创建编排图
@@ -206,7 +202,8 @@ def chat_mode(port: int = 7860, share: bool = False):
     logger.info(f"LLM: provider={llm_client.provider}, model={llm_client.model}, "
                 f"key={'已设置' if llm_client.api_key else '未设置（Mock模式）'}")
 
-    graph_store = build_graph_store(config)
+    # 对话模式使用纯内存图谱，跳过 Neo4j 连接避免超时等待
+    graph_store = GraphStore(memory_only=True)
     prompt_manager = PromptManager()
 
     dialogue_manager = DialogueManager(

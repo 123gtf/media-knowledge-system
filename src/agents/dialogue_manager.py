@@ -24,15 +24,24 @@ FUZZY_KEYWORDS = [
 
 # 常见停用词（不应作为实体名去检索）
 STOPWORDS = {
+    # 中文
     "什么", "怎么", "为什么", "哪些", "如何", "可以", "是否", "有没有",
     "请问", "你好", "谢谢", "最近", "最新", "之前", "关于", "方面",
     "情况", "新闻", "消息", "事情", "事件", "问题", "行业", "领域",
-    "发展", "变化", "趋势", "热点",
+    "发展", "变化", "趋势", "热点", "那个", "这个", "一些", "一下",
+    # 英文
+    "the", "is", "are", "was", "were", "what", "how", "why", "when",
+    "where", "who", "which", "that", "this", "can", "could", "would",
+    "should", "will", "do", "does", "did", "has", "have", "had",
+    "and", "but", "or", "not", "for", "with", "from", "about",
+    "latest", "new", "news", "tell", "please",
 }
 
 
 class DialogueManager:
     """对话管理器 —— 管理多轮对话、知识检索、追问"""
+
+    MAX_HISTORY_TURNS = 10  # 最多保留的对话轮次（user+assistant 各算一轮）
 
     def __init__(
         self,
@@ -160,7 +169,8 @@ class DialogueManager:
         call_messages.append({"role": "user", "content": augmented_prompt})
 
         # 5. 调用 LLM（传入临时消息列表，不污染 self.history）
-        answer = self.llm.chat(call_messages)
+        #    对话场景用较高 temperature，避免回答过于机械
+        answer = self.llm.chat(call_messages, temperature=0.7)
 
         # 6. 只将原始用户消息和回答加入历史
         self.history.append({"role": "user", "content": user_message})
@@ -168,7 +178,10 @@ class DialogueManager:
         self.turns.append({"role": "user", "content": user_message})
         self.turns.append({"role": "assistant", "content": answer})
 
-        # 7. 更新最近话题
+        # 7. 截断历史，控制 token 消耗
+        self._truncate_history()
+
+        # 8. 更新最近话题
         self._last_topic = user_message
 
         return {
@@ -215,15 +228,13 @@ class DialogueManager:
             return f"您刚才问到了「{self._last_topic}」，能具体说明想了解哪个方面吗？比如相关的时间、人物或事件。"
         return "您的问题我还不太确定具体指什么，能再描述一下吗？比如您想了解哪个人物、公司或事件？"
 
-    def _summarize_history(self) -> str:
-        """摘要化对话历史（取最近3轮）"""
-        recent = self.turns[-6:] if len(self.turns) > 6 else self.turns
-        parts = []
-        for msg in recent:
-            role = "用户" if msg["role"] == "user" else "助手"
-            content = msg["content"][:100]
-            parts.append(f"{role}：{content}")
-        return "\n".join(parts) if parts else "（无对话历史）"
+    def _truncate_history(self):
+        """截断对话历史，只保留最近 N 轮（防止 token 膨胀）"""
+        max_messages = self.MAX_HISTORY_TURNS * 2  # 每轮 = user + assistant
+        if len(self.history) > max_messages + 1:  # +1 保留 system prompt
+            # 保留 system prompt + 最近 N 轮
+            keep_from = len(self.history) - max_messages
+            self.history = [self.history[0]] + self.history[keep_from:]
 
     # ------------------------------------------------------------------
     # 知识检索
@@ -296,8 +307,10 @@ class DialogueManager:
         1. 提取连续中文字符（2字以上）
         2. 过滤停用词
         3. 保留英文专有名词（如 GPT-5, OpenAI）
+        4. 保留常见缩写（AI, CEO, NLP）
         """
         keywords = []
+        seen_lower = set()
 
         # 中文关键词
         cn_words = re.findall(r"[一-鿿]{2,}", text)
@@ -305,50 +318,28 @@ class DialogueManager:
             if w not in STOPWORDS and len(w) <= 10:
                 keywords.append(w)
 
-        # 英文专有名词（大写开头的连续英文/数字/连字符组合）
-        en_words = re.findall(r"[A-Z][A-Za-z0-9\-_.]+", text)
-        keywords.extend(en_words)
+        # 英文专有名词（大写开头：OpenAI, GPT-5, DeepMind）
+        en_words = re.findall(r"[A-Z][A-Za-z0-9\-_.]*", text)
+        for w in en_words:
+            if w.lower() not in seen_lower:
+                keywords.append(w)
+                seen_lower.add(w.lower())
 
-        # 也匹配全部大写的缩写（如 AI, CEO）
+        # 全大写缩写（AI, CEO, NLP, API）
         en_acronyms = re.findall(r"\b[A-Z]{2,}\b", text)
-        keywords.extend(en_acronyms)
+        for w in en_acronyms:
+            if w.lower() not in seen_lower:
+                keywords.append(w)
+                seen_lower.add(w.lower())
+
+        # 小写英文词（gpt, openai, llama），匹配图谱中的实体
+        en_lower = re.findall(r"\b[a-z][a-z0-9\-_.]{1,}\b", text.lower())
+        for w in en_lower:
+            if w not in STOPWORDS and w.lower() not in seen_lower and len(w) >= 2:
+                # 首字母大写后尝试匹配
+                cap = w.capitalize()
+                keywords.append(cap)
+                keywords.append(w)
+                seen_lower.add(w.lower())
 
         return keywords
-
-    # ------------------------------------------------------------------
-    # Prompt 构建
-    # ------------------------------------------------------------------
-
-    def _build_qa_prompt_with_context(self, question: str, context: str) -> str:
-        """构建带知识上下文的问答 prompt"""
-        if self.pm:
-            try:
-                template = self.pm.get("dialogue")
-                qa_template = template.get("qa_with_context", "")
-                if qa_template:
-                    return qa_template.format(context=context, question=question)
-            except Exception:
-                pass
-
-        return (
-            f"知识图谱上下文：\n{context}\n\n"
-            f"---\n\n"
-            f"用户问题：{question}\n\n"
-            f"请基于以上知识图谱上下文回答。"
-        )
-
-    def _build_qa_prompt_without_context(self, question: str) -> str:
-        """构建无知识上下文的问答 prompt"""
-        if self.pm:
-            try:
-                template = self.pm.get("dialogue")
-                qa_template = template.get("qa_without_context", "")
-                if qa_template:
-                    return qa_template.format(question=question)
-            except Exception:
-                pass
-
-        return (
-            f"用户问题：{question}\n\n"
-            f"（知识图谱中未找到直接相关信息，请基于通用知识回答。）"
-        )
